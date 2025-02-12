@@ -1,0 +1,3 @@
+# https://github.com/Gottox/mk
+configure:
+  - -Db_sanitize=address,undefined
