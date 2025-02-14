@@ -197,6 +197,11 @@ bool
 input_start(struct Input *input) {
 	bool rv = false;
 
+	rv = ch9329_reset(&input->hid) >= 0;
+	if (!rv) {
+		goto out;
+	}
+
 	rv = status_update(input);
 	if (!rv) {
 		goto out;
@@ -212,6 +217,11 @@ out:
 
 bool
 input_send_input_event(struct Input *input, SDL_Event *event, bool rel_mouse) {
+	SDL_FPoint p = {event->motion.x, event->motion.y};
+	if (!SDL_PointInRectFloat(&p, &input->rect)) {
+		return false;
+	}
+
 	SDL_LockMutex(input->condition_mutex);
 
 	struct InputEvent *last_event_item =
