@@ -22,3 +22,5 @@ ch9329_dep = declare_dependency(
     include_directories: include_dirs,
     link_with: ch9329_lib,
 )
+
+executable('ch9329', main_src, install: false, dependencies: ch9329_dep)

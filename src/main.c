@@ -17,11 +17,33 @@
 #define COMMAND_MODE_TIMEOUT_CODE 'D'
 #define INDICATOR_TIMEOUT_CODE 'I'
 
-const struct SDL_Color tint_color = {0, 255, 255, SDL_ALPHA_OPAQUE};
+static const SDL_Color color_tint = {0, 255, 255, SDL_ALPHA_OPAQUE};
+static const SDL_Color color_green = {0, 255, 0, SDL_ALPHA_OPAQUE};
+static const SDL_Color color_gray = {128, 128, 128, SDL_ALPHA_OPAQUE};
+static const SDL_Color color_red = {255, 0, 0, SDL_ALPHA_OPAQUE};
+static const Uint8 cursor_msb[2][8] = {
+		{
+				0x00,
+				0x60,
+				0x60,
+				0x00,
+				0x00,
+				0x00,
+				0x00,
+				0x00,
 
-const SDL_Color green = {0, 255, 0, SDL_ALPHA_OPAQUE};
-const SDL_Color gray = {128, 128, 128, SDL_ALPHA_OPAQUE};
-const SDL_Color red = {255, 0, 0, SDL_ALPHA_OPAQUE};
+		},
+		{
+				0x60,
+				0xF0,
+				0xF0,
+				0x60,
+				0x00,
+				0x00,
+				0x00,
+				0x00,
+		},
+};
 
 struct Ui {
 	bool running;
@@ -41,10 +63,10 @@ draw_indicator(
 		bool (*get_status)(struct Input *)) {
 	const int width = 8;
 	const int height = 32;
-	const SDL_Color *color = &red;
+	const SDL_Color *color = &color_red;
 
 	if (input_status_connected(&ui->input)) {
-		color = get_status(&ui->input) ? &green : &gray;
+		color = get_status(&ui->input) ? &color_green : &color_gray;
 	}
 
 	SDL_SetRenderDrawColor(
@@ -62,9 +84,37 @@ draw_indicator(
 }
 
 static bool
-redraw(struct Ui *ui) {
+update_camera_rect(struct Ui *ui) {
 	int window_height = 0;
 	int window_width = 0;
+	SDL_GetWindowSize(ui->window, &window_width, &window_height);
+	int camera_width = 0;
+	int camera_height = 0;
+	if (!camera_size(&ui->camera, &camera_width, &camera_height)) {
+		return false;
+	}
+
+	float camera_aspect = (float)camera_width / (float)camera_height;
+	float win_aspect = (float)window_width / (float)window_height;
+
+	if (win_aspect > camera_aspect) {
+		ui->camera_rect.h = window_height;
+		ui->camera_rect.w = window_height * camera_aspect;
+		ui->camera_rect.x = (window_width - ui->camera_rect.w) / 2;
+		ui->camera_rect.y = 0;
+	} else {
+		ui->camera_rect.w = window_width;
+		ui->camera_rect.h = window_width / camera_aspect;
+		ui->camera_rect.x = 0;
+		ui->camera_rect.y = (window_height - ui->camera_rect.h) / 2;
+	}
+
+	input_set_rect(&ui->input, &ui->camera_rect);
+	return true;
+}
+
+static bool
+redraw(struct Ui *ui) {
 	if (!ui->window) {
 		return false;
 	}
@@ -72,48 +122,38 @@ redraw(struct Ui *ui) {
 	SDL_LogTrace(SDL_LOG_CATEGORY_RENDER, "Redrawing");
 
 	SDL_Texture *texture = camera_texture(&ui->camera);
-	SDL_GetWindowSize(ui->window, &window_width, &window_height);
 
 	SDL_SetRenderDrawColor(
-			ui->renderer, tint_color.r / 4, tint_color.g / 4, tint_color.b / 4,
-			tint_color.a);
+			ui->renderer, color_tint.r / 4, color_tint.g / 4, color_tint.b / 4,
+			color_tint.a);
 	SDL_RenderClear(ui->renderer);
 
 	if (texture) {
-		float aspect_ratio = (float)texture->w / (float)texture->h;
-		float win_aspect = (float)window_width / (float)window_height;
-
-		if (win_aspect > aspect_ratio) {
-			ui->camera_rect.h = window_height;
-			ui->camera_rect.w = (int)(window_height * aspect_ratio);
-			ui->camera_rect.x = (window_width - ui->camera_rect.w) / 2;
-			ui->camera_rect.y = 0;
-		} else {
-			ui->camera_rect.w = window_width;
-			ui->camera_rect.h = (int)(window_width / aspect_ratio);
-			ui->camera_rect.x = 0;
-			ui->camera_rect.y = (window_height - ui->camera_rect.h) / 2;
-		}
 		SDL_RenderTexture(ui->renderer, texture, NULL, &ui->camera_rect);
 	}
 
 	if (ui->command_mode) {
 		SDL_SetRenderDrawColor(
-				ui->renderer, tint_color.r / 2, tint_color.g / 2,
-				tint_color.b / 2, tint_color.a);
+				ui->renderer, color_tint.r / 2, color_tint.g / 2,
+				color_tint.b / 2, color_tint.a);
 		SDL_SetRenderScale(ui->renderer, 8.0, 8.0);
 		SDL_RenderRect(ui->renderer, NULL);
 
 		SDL_SetRenderDrawColor(
-				ui->renderer, tint_color.r / 3, tint_color.g / 3,
-				tint_color.b / 3, tint_color.a);
+				ui->renderer, color_tint.r / 3, color_tint.g / 3,
+				color_tint.b / 3, color_tint.a);
 		SDL_SetRenderScale(ui->renderer, 6.0, 6.0);
 		SDL_RenderRect(ui->renderer, NULL);
 
 		SDL_SetRenderScale(ui->renderer, 1.0, 1.0);
 	}
 
-	if (ui->show_indicator || ui->command_mode) {
+	if (ui->show_indicator || ui->command_mode ||
+		!input_status_connected(&ui->input)) {
+		int window_height = 0;
+		int window_width = 0;
+		SDL_GetWindowSize(ui->window, &window_width, &window_height);
+
 		SDL_Point position = {.x = window_width - 32, .y = window_height};
 		draw_indicator(ui, &position, input_status_scrolllock);
 		position.x -= 64;
@@ -149,6 +189,10 @@ start_ui(struct Ui *ui) {
 
 	float aspect_ratio = (float)width / (float)height;
 	SDL_SetWindowAspectRatio(ui->window, aspect_ratio, aspect_ratio);
+
+	if (!update_camera_rect(ui)) {
+		return false;
+	}
 
 	return true;
 }
@@ -186,9 +230,15 @@ handle_command(struct Ui *ui, SDL_Event *event) {
 				SDL_GetWindowFlags(ui->window) & SDL_WINDOW_FULLSCREEN;
 		SDL_SetWindowFullscreen(ui->window, !fullscreen);
 	} break;
-	case SDLK_Q:
+	case SDLK_Q: {
 		ui->running = false;
-		break;
+	} break;
+	case SDLK_O: {
+		SDL_Texture *texture = camera_texture(&ui->camera);
+		if (texture) {
+			SDL_SetWindowSize(ui->window, texture->w, texture->h);
+		}
+	} break;
 	}
 	SDL_RemoveTimer(ui->command_mode);
 	ui->command_mode = 0;
@@ -217,6 +267,10 @@ main(int argc, char *argv[]) {
 		return 1;
 	}
 
+	SDL_Cursor *cursor =
+			SDL_CreateCursor(cursor_msb[0], cursor_msb[1], 8, 8, 1, 1);
+	SDL_SetCursor(cursor);
+
 	SDL_Event event;
 
 	ui.running = true;
@@ -240,17 +294,14 @@ main(int argc, char *argv[]) {
 				ui.show_indicator = SDL_AddTimer(
 						INDICATOR_TIMEOUT, user_event_timer,
 						(void *)INDICATOR_TIMEOUT_CODE);
-				redraw(&ui);
 				break;
 			case COMMAND_MODE_TIMEOUT_CODE:
 				SDL_RemoveTimer(ui.command_mode);
 				ui.command_mode = 0;
-				redraw(&ui);
 				break;
 			case INDICATOR_TIMEOUT_CODE:
 				SDL_RemoveTimer(ui.show_indicator);
 				ui.show_indicator = 0;
-				redraw(&ui);
 				break;
 			}
 			redraw(&ui);
@@ -288,10 +339,12 @@ main(int argc, char *argv[]) {
 			camera_start(&ui.camera);
 			break;
 		case SDL_EVENT_CAMERA_DEVICE_DENIED:
-			SDL_Log("Camera use denied by user!");
+			SDL_LogWarn(
+					SDL_LOG_CATEGORY_APPLICATION, "Camera use denied by user!");
 			ui.running = false;
 			break;
 		case SDL_EVENT_WINDOW_RESIZED:
+			update_camera_rect(&ui);
 			redraw(&ui);
 			break;
 		}
@@ -302,6 +355,7 @@ main(int argc, char *argv[]) {
 
 	SDL_DestroyRenderer(ui.renderer);
 	SDL_DestroyWindow(ui.window);
+	SDL_DestroyCursor(cursor);
 	SDL_Quit();
 
 	return 0;

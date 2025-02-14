@@ -1,6 +1,5 @@
 #include "camera.h"
 
-#include <assert.h>
 #include <stdbool.h>
 
 static bool
@@ -56,8 +55,9 @@ update_camera_frame(struct Camera *camera) {
 	camera->timestamp = frame_timestamp;
 
 	if (camera->jpeg_frame &&
-		memcmp(jpeg_frame->pixels, camera->jpeg_frame->pixels,
-			   jpeg_frame->pitch) == 0) {
+		SDL_memcmp(
+				jpeg_frame->pixels, camera->jpeg_frame->pixels,
+				jpeg_frame->pitch) == 0) {
 		goto out;
 	}
 

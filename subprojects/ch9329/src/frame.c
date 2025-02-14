@@ -1,7 +1,9 @@
+#include <assert.h>
 #include <ch9329.h>
+#include <string.h>
 
 int
-ch9329_frame_init(
+ch9329_frame(
 		struct Ch9329Frame *frame, enum Ch9329Command command, const void *data,
 		int len) {
 	assert(len <= 256);

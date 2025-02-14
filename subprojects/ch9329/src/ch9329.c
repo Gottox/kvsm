@@ -1,4 +1,6 @@
 #include <ch9329.h>
+#include <string.h>
+#include <sys/select.h>
 
 static int
 serial_write(SerialPort port, const uint8_t *buf, int len) {
@@ -8,6 +10,17 @@ serial_write(SerialPort port, const uint8_t *buf, int len) {
 static int
 serial_read(SerialPort port, uint8_t *buf, int len) {
 	return read(port, buf, len);
+}
+
+static int
+serial_wait(struct Ch9329 *ch9329, int timeout) {
+	fd_set fds;
+	FD_ZERO(&fds);
+	FD_SET(ch9329->fd, &fds);
+	struct timeval tv = {0};
+	tv.tv_usec = timeout * 1000;
+	tv.tv_sec = timeout / 1000;
+	return select(ch9329->fd + 1, &fds, NULL, NULL, &tv) > 0;
 }
 
 static uint8_t
@@ -24,7 +37,7 @@ gen_checksum(const struct Ch9329Frame *frame) {
 }
 
 int
-ch9329_init(struct Ch9329 *ch9329, int fd) {
+ch9329_init(struct Ch9329 *ch9329, int fd, int timeout) {
 	int rv = 0;
 	struct termios tio;
 
@@ -61,12 +74,13 @@ ch9329_init(struct Ch9329 *ch9329, int fd) {
 		goto out;
 	}
 
+	ch9329->timeout = timeout;
 out:
 	return rv;
 }
 
 int
-ch9329_open(struct Ch9329 *ch9329, const char *path) {
+ch9329_open(struct Ch9329 *ch9329, const char *path, int timeout) {
 	int rv = 0;
 	int fd = open(path, O_RDWR | O_NOCTTY | O_SYNC);
 	if (fd < 0) {
@@ -74,7 +88,7 @@ ch9329_open(struct Ch9329 *ch9329, const char *path) {
 		goto out;
 	}
 
-	rv = ch9329_init(ch9329, fd);
+	rv = ch9329_init(ch9329, fd, timeout);
 out:
 	return rv;
 }
@@ -83,6 +97,8 @@ int
 ch9329_receive(struct Ch9329 *ch9329, struct Ch9329Frame *frame) {
 	int rv = 0;
 	uint8_t checksum = 0;
+
+	memset(frame, 0, sizeof(struct Ch9329Frame));
 
 	// header
 	rv = serial_read(ch9329->fd, frame->header, sizeof(frame->header));
@@ -93,10 +109,24 @@ ch9329_receive(struct Ch9329 *ch9329, struct Ch9329Frame *frame) {
 
 	uint8_t len = ch9329_frame_len(frame);
 	if (len > 0) {
+		if (ch9329->timeout > 0) {
+			rv = serial_wait(ch9329, ch9329->timeout);
+			if (rv < 0) {
+				goto out;
+			}
+		}
+
 		// data
 		rv = serial_read(ch9329->fd, frame->data, len);
 		if (rv < len) {
 			rv = -1;
+			goto out;
+		}
+	}
+
+	if (ch9329->timeout > 0) {
+		rv = serial_wait(ch9329, ch9329->timeout);
+		if (rv < 0) {
 			goto out;
 		}
 	}
@@ -144,6 +174,42 @@ ch9329_send(struct Ch9329 *ch9329, const struct Ch9329Frame *frame) {
 	}
 out:
 	return rv;
+}
+
+int
+ch9329_request(struct Ch9329 *ch9329, struct Ch9329Frame *frame) {
+	int rv = 0;
+	enum Ch9329Command command = ch9329_frame_command(frame);
+
+	rv = ch9329_send(ch9329, frame);
+	if (rv < 0) {
+		goto out;
+	}
+
+	rv = ch9329_receive(ch9329, frame);
+	if (rv < 0) {
+		goto out;
+	}
+
+	rv = -ch9329_frame_error(frame);
+	if (rv < 0) {
+		goto out;
+	}
+
+	if (ch9329_frame_command(frame) != (0x80 | command)) {
+		rv = -1;
+		goto out;
+	}
+
+out:
+	return rv;
+}
+
+int
+ch9329_reset(struct Ch9329 *ch9329) {
+	struct Ch9329Frame frame = {0};
+	ch9329_frame(&frame, CH9329_CMD_RESET, NULL, 0);
+	return ch9329_request(ch9329, &frame);
 }
 
 int

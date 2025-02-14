@@ -13,16 +13,7 @@
 #define MOD_RALT (1 << 6)
 #define MOD_RGUI (1 << 7)
 
-static bool
-select_hid(struct Input *input) {
-	fd_set fds;
-	FD_ZERO(&fds);
-	FD_SET(input->hid.fd, &fds);
-	struct timeval tv = {0};
-	tv.tv_sec = 0;
-	tv.tv_usec = input->receive_timeout * 1000;
-	return select(input->hid.fd + 1, &fds, NULL, NULL, &tv) > 0;
-}
+#define DEBOUNCE_THRESHOULD 5
 
 bool
 input_init(struct Input *input, const char *input_name) {
@@ -41,9 +32,8 @@ input_init(struct Input *input, const char *input_name) {
 	}
 
 	input->status_interval = 100;
-	input->receive_timeout = 100;
 
-	if (ch9329_open(&input->hid, input_name) < 0) {
+	if (ch9329_open(&input->hid, input_name, 100) < 0) {
 		goto out;
 	}
 
@@ -55,152 +45,59 @@ out:
 	return rv;
 }
 
-static void
-add_key_state(struct Input *input, SDL_Scancode scancode) {
-	switch (scancode) {
-	case SDL_SCANCODE_LCTRL:
-		input->key_data[0] |= MOD_LCTRL;
+static bool
+button(struct Input *input, Uint8 button, bool pressed) {
+	Uint8 button_mask = 0;
+	switch (button) {
+	case SDL_BUTTON_LEFT:
+		button_mask = CH9329_MOUSE_LEFT;
 		break;
-	case SDL_SCANCODE_LSHIFT:
-		input->key_data[0] |= MOD_LSHIFT;
+	case SDL_BUTTON_MIDDLE:
+		button_mask = CH9329_MOUSE_MIDDLE;
 		break;
-	case SDL_SCANCODE_LALT:
-		input->key_data[0] |= MOD_LALT;
-		break;
-	case SDL_SCANCODE_LGUI:
-		input->key_data[0] |= MOD_LGUI;
-		break;
-	case SDL_SCANCODE_RCTRL:
-		input->key_data[0] |= MOD_RCTRL;
-		break;
-	case SDL_SCANCODE_RSHIFT:
-		input->key_data[0] |= MOD_RSHIFT;
-		break;
-	case SDL_SCANCODE_RALT:
-		input->key_data[0] |= MOD_RALT;
-		break;
-	case SDL_SCANCODE_RGUI:
-		input->key_data[0] |= MOD_RGUI;
+	case SDL_BUTTON_RIGHT:
+		button_mask = CH9329_MOUSE_RIGHT;
 		break;
 	default:
-		for (int i = 2; i < INPUT_KEY_DATA_SIZE; i++) {
-			if (input->key_data[i] == 0) {
-				input->key_data[i] = scancode;
-				break;
-			}
-		}
-		break;
+		return false;
 	}
-}
 
-static void
-remove_key_state(struct Input *input, SDL_Scancode scancode) {
-	switch (scancode) {
-	case SDL_SCANCODE_LCTRL:
-		input->key_data[0] &= ~MOD_LCTRL;
-		break;
-	case SDL_SCANCODE_LSHIFT:
-		input->key_data[0] &= ~MOD_LSHIFT;
-		break;
-	case SDL_SCANCODE_LALT:
-		input->key_data[0] &= ~MOD_LALT;
-		break;
-	case SDL_SCANCODE_LGUI:
-		input->key_data[0] &= ~MOD_LGUI;
-		break;
-	case SDL_SCANCODE_RCTRL:
-		input->key_data[0] &= ~MOD_RCTRL;
-		break;
-	case SDL_SCANCODE_RSHIFT:
-		input->key_data[0] &= ~MOD_RSHIFT;
-		break;
-	case SDL_SCANCODE_RALT:
-		input->key_data[0] &= ~MOD_RALT;
-		break;
-	case SDL_SCANCODE_RGUI:
-		input->key_data[0] &= ~MOD_RGUI;
-		break;
-	default:
-		for (int i = 2; i < INPUT_KEY_DATA_SIZE; i++) {
-			if (input->key_data[i] == scancode) {
-				input->key_data[i] = 0;
-				break;
-			}
-		}
-		break;
-	}
+	return ch9329_mouse_button(&input->hid, button_mask, pressed) >= 0;
 }
 
 static bool
-update_keyboard(struct Input *input) {
-	bool rv = false;
-	struct Ch9329Frame frame = {0};
-	ch9329_frame_init(
-			&frame, CH9329_CMD_SEND_KB_GENERAL_DATA, input->key_data,
-			INPUT_KEY_DATA_SIZE);
-
-	if (!ch9329_send(&input->hid, &frame)) {
-		goto out;
+mouse_abs(struct Input *input, Uint16 x, Uint16 y) {
+	x = (x - input->rect.x) * 4096 / input->rect.w;
+	y = (y - input->rect.y) * 4096 / input->rect.h;
+	if (x > 4095) {
+		x = 4095;
 	}
-
-	if (!select_hid(input)) {
-		SDL_Log("Timeout waiting for keyboard update");
-		goto out;
+	if (y > 4095) {
+		y = 4095;
 	}
-
-	if (ch9329_receive(&input->hid, &frame) < 0) {
-		goto out;
-	}
-
-	rv = true;
-out:
-	return rv;
-}
-
-static bool
-update_mouse(struct Input *input, Sint16 xrel, Sint16 yrel) {
-	bool rv = false;
-	uint8_t data[4] = {0};
-	data[0] = xrel & 0xff;
-	data[1] = (xrel >> 8) & 0xff;
-	data[2] = yrel & 0xff;
-	data[3] = (yrel >> 8) & 0xff;
-
-	struct Ch9329Frame frame = {0};
-	ch9329_frame_init(&frame, CH9329_CMD_SEND_MS_REL_DATA, data, 4);
-
-	if (!ch9329_send(&input->hid, &frame)) {
-		goto out;
-	}
-
-	if (!select_hid(input)) {
-		SDL_Log("Timeout waiting for mouse update");
-		goto out;
-	}
-
-	if (ch9329_receive(&input->hid, &frame) < 0) {
-		goto out;
-	}
-
-	rv = true;
-out:
-	return rv;
+	return ch9329_mouse_abs(&input->hid, x, y) >= 0;
 }
 
 static bool
 handle_input_event(struct Input *input, struct InputEvent *event) {
 	switch (event->event.type) {
 	case SDL_EVENT_KEY_DOWN:
-		add_key_state(input, event->event.key.scancode);
-		update_keyboard(input);
+		ch9329_keyboard(&input->hid, event->event.key.scancode, true);
 		break;
 	case SDL_EVENT_KEY_UP:
-		remove_key_state(input, event->event.key.scancode);
-		update_keyboard(input);
+		ch9329_keyboard(&input->hid, event->event.key.scancode, false);
 		break;
 	case SDL_EVENT_MOUSE_MOTION:
-		// update_mouse(input, event->rel_mouse, event->event.motion.xrel,
-		// event->event.motion.yrel);
+		mouse_abs(input, event->event.motion.x, event->event.motion.y);
+		break;
+	case SDL_EVENT_MOUSE_BUTTON_DOWN:
+		button(input, event->event.button.button, true);
+		break;
+	case SDL_EVENT_MOUSE_BUTTON_UP:
+		button(input, event->event.button.button, false);
+		break;
+	case SDL_EVENT_MOUSE_WHEEL:
+		ch9329_mouse_wheel(&input->hid, event->event.wheel.y);
 		break;
 	}
 	return true;
@@ -211,24 +108,8 @@ status_update(struct Input *input) {
 	bool rv = false;
 	bool changed;
 	struct Ch9329Frame frame = {0};
-
-	ch9329_frame_init(&frame, CH9329_CMD_GET_INFO, NULL, 0);
-
-	if (ch9329_send(&input->hid, &frame) < 0) {
-		goto out;
-	}
-	if (select_hid(input) == false) {
-		SDL_Log("Timeout waiting for input status");
-		goto out;
-	}
-	if (ch9329_receive(&input->hid, &frame) < 0) {
-		goto out;
-	}
-
-	if (ch9329_frame_error(&frame) != CH9329_SUCCESS) {
-		goto out;
-	}
-	if (ch9329_frame_len(&frame) != 8) {
+	rv = ch9329_get_info(&input->hid, &frame) >= 0;
+	if (!rv) {
 		goto out;
 	}
 
@@ -255,6 +136,25 @@ out:
 }
 
 static int
+debounce_events(struct Input *input) {
+	bool debounce = true;
+	while (debounce) {
+		SDL_LockMutex(input->mutex);
+		struct InputEvent *event_item =
+				&input->event_ring[input->event_ring_last_head];
+		if (event_item->event.type != SDL_EVENT_MOUSE_MOTION) {
+			debounce = false;
+		} else if (!SDL_WaitConditionTimeout(
+						   input->condition, input->condition_mutex,
+						   DEBOUNCE_THRESHOULD)) {
+			debounce = false;
+		}
+		SDL_UnlockMutex(input->mutex);
+	}
+	return 0;
+}
+
+static int
 input_thread(void *data) {
 	struct Input *input = data;
 	SDL_LockMutex(input->condition_mutex);
@@ -264,6 +164,8 @@ input_thread(void *data) {
 		if (SDL_WaitConditionTimeout(
 					input->condition, input->condition_mutex,
 					input->status_interval)) {
+			debounce_events(input);
+
 			SDL_LockMutex(input->mutex);
 			while (input->event_ring_tail != input->event_ring_head) {
 				event_item = &input->event_ring[input->event_ring_tail];
@@ -294,45 +196,43 @@ input_thread(void *data) {
 bool
 input_start(struct Input *input) {
 	bool rv = false;
-	struct Ch9329Frame frame = {0};
+
+	rv = status_update(input);
+	if (!rv) {
+		goto out;
+	}
+
 	input->thread = SDL_CreateThread(input_thread, "input_thread", input);
 	if (input->thread == NULL) {
 		goto out;
 	}
-
-	if (ch9329_send(&input->hid, &frame) < 0) {
-		goto out;
-	}
-
-	rv = status_update(input);
 out:
 	return rv;
 }
 
 bool
 input_send_input_event(struct Input *input, SDL_Event *event, bool rel_mouse) {
-	bool rv = false;
 	SDL_LockMutex(input->condition_mutex);
 
-	int next_head = (input->event_ring_head + 1) % INPUT_EVENT_RING_SIZE;
-	if (next_head == input->event_ring_tail) {
-		SDL_LogWarn(
-				SDL_LOG_CATEGORY_APPLICATION,
-				"Input event ring full, dropping event");
-		goto out;
+	struct InputEvent *last_event_item =
+			&input->event_ring[input->event_ring_last_head];
+	if (event->type == SDL_EVENT_MOUSE_MOTION &&
+		last_event_item->event.type == SDL_EVENT_MOUSE_MOTION) {
+		SDL_memcpy(&last_event_item->event, event, sizeof(SDL_Event));
+	} else {
+		struct InputEvent *event_item =
+				&input->event_ring[input->event_ring_head];
+		int next_head = (input->event_ring_head + 1) % INPUT_EVENT_RING_SIZE;
+		SDL_memcpy(&event_item->event, event, sizeof(SDL_Event));
+		event_item->rel_mouse = rel_mouse;
+		input->event_ring_last_head = input->event_ring_head;
+		input->event_ring_head = next_head;
 	}
-	struct InputEvent *event_item = &input->event_ring[input->event_ring_head];
-	input->event_ring_head = next_head;
-
-	SDL_memcpy(&event_item->event, event, sizeof(SDL_Event));
-	event_item->rel_mouse = rel_mouse;
 
 	SDL_SignalCondition(input->condition);
 
-	rv = true;
-out:
 	SDL_UnlockMutex(input->condition_mutex);
-	return rv;
+	return true;
 }
 
 bool
@@ -365,6 +265,14 @@ input_status_connected(struct Input *input) {
 	bool rv = ch9329_frame_data(&input->hid_status)[1] == 0x01;
 	SDL_UnlockMutex(input->mutex);
 	return rv;
+}
+
+bool
+input_set_rect(struct Input *input, SDL_FRect *rect) {
+	SDL_LockMutex(input->mutex);
+	input->rect = *rect;
+	SDL_UnlockMutex(input->mutex);
+	return true;
 }
 
 bool

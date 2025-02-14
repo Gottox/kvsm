@@ -1,22 +1,30 @@
 #ifndef CH9329_H
 #define CH9329_H
-#include <assert.h>
-#include <fcntl.h> // Contains file controls like O_RDWR
+#include <fcntl.h>
+#include <stdbool.h>
 #include <stdint.h>
-#include <string.h>
-#include <termios.h> // Contains POSIX terminal control definitions
-#include <unistd.h> // write(), read(), close()
+#include <termios.h>
+#include <unistd.h>
 
 typedef int SerialPort;
 
 struct Ch9329 {
 	SerialPort fd;
 	struct termios oldtio;
+	int timeout;
+	uint8_t keyboard_state[8];
+	uint8_t mouse_button_state;
 };
 
 struct Ch9329Frame {
 	uint8_t header[5];
 	uint8_t data[256];
+};
+
+enum Ch9329Indicator {
+	CH9329_INDICATOR_NUM_LOCK = 1,
+	CH9329_INDICATOR_CAPS_LOCK = 1 << 1,
+	CH9329_INDICATOR_SCROLL_LOCK = 1 << 2,
 };
 
 enum Ch9329Command {
@@ -59,7 +67,9 @@ enum Ch9329Error {
 	CH9329_ERR_OPERATE = 0xE6 // Normal operation, but execution failed
 };
 
-int ch9329_frame_init(
+////////////////////////////////////////
+// frame.c
+int ch9329_frame(
 		struct Ch9329Frame *frame, enum Ch9329Command command, const void *data,
 		int len);
 
@@ -71,14 +81,56 @@ const uint8_t *ch9329_frame_data(const struct Ch9329Frame *frame);
 
 enum Ch9329Error ch9329_frame_error(const struct Ch9329Frame *frame);
 
-int ch9329_init(struct Ch9329 *ch9329, int fd);
+////////////////////////////////////////
+// ch9329.c
+int ch9329_init(struct Ch9329 *ch9329, int fd, int timeout);
 
-int ch9329_open(struct Ch9329 *ch9329, const char *path);
+int ch9329_open(struct Ch9329 *ch9329, const char *path, int timeout);
 
 int ch9329_receive(struct Ch9329 *ch9329, struct Ch9329Frame *frame);
 
 int ch9329_send(struct Ch9329 *ch9329, const struct Ch9329Frame *frame);
 
+int ch9329_request(struct Ch9329 *ch9329, struct Ch9329Frame *frame);
+
+int ch9329_reset(struct Ch9329 *ch9329);
+
 int ch9329_close(struct Ch9329 *ch9329);
+
+////////////////////////////////////////
+// info.c
+int ch9329_get_info(struct Ch9329 *ch9329, struct Ch9329Frame *frame);
+
+uint8_t ch9329_info_version(const struct Ch9329Frame *frame);
+
+bool ch9329_info_connected(const struct Ch9329Frame *frame);
+
+bool ch9329_info_num_lock(const struct Ch9329Frame *frame);
+
+bool ch9329_info_caps_lock(const struct Ch9329Frame *frame);
+
+bool ch9329_info_scroll_lock(const struct Ch9329Frame *frame);
+
+////////////////////////////////////////
+// keyboard.c
+int ch9329_keyboard(struct Ch9329 *ch9329, uint8_t scan_code, bool pressed);
+
+////////////////////////////////////////
+// mouse.c
+enum Ch9329MouseButton {
+	CH9329_MOUSE_LEFT = 1,
+	CH9329_MOUSE_RIGHT = 1 << 1,
+	CH9329_MOUSE_MIDDLE = 1 << 2,
+	CH9329_MOUSE_ALL =
+			CH9329_MOUSE_LEFT | CH9329_MOUSE_RIGHT | CH9329_MOUSE_MIDDLE,
+};
+
+int ch9329_mouse_abs(struct Ch9329 *ch9329, uint16_t x, uint16_t y);
+
+int ch9329_mouse_rel(struct Ch9329 *ch9329, int8_t x, int8_t y);
+
+int ch9329_mouse_wheel(struct Ch9329 *ch9329, int8_t wheel);
+
+int ch9329_mouse_button(struct Ch9329 *ch9329, uint8_t button, bool pressed);
 
 #endif
