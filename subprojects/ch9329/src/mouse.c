@@ -1,5 +1,16 @@
 #include "ch9329.h"
 
+static int
+mouse_rel(struct Ch9329 *ch9329, int8_t x, int8_t y, int8_t wheel) {
+	const uint8_t data[5] = {
+			[0] = 0x01,  [1] = ch9329->mouse_button_state, [2] = x, [3] = y,
+			[4] = wheel,
+	};
+	struct Ch9329Frame frame = {0};
+	ch9329_frame(&frame, CH9329_CMD_SEND_MS_REL_DATA, &data, 5);
+	return ch9329_request(ch9329, &frame);
+}
+
 int
 ch9329_mouse_abs(struct Ch9329 *ch9329, uint16_t x, uint16_t y) {
 	const uint8_t data[7] = {
@@ -15,24 +26,12 @@ ch9329_mouse_abs(struct Ch9329 *ch9329, uint16_t x, uint16_t y) {
 
 int
 ch9329_mouse_rel(struct Ch9329 *ch9329, int8_t x, int8_t y) {
-	const uint8_t data[5] = {
-			[0] = 0x01, [1] = ch9329->mouse_button_state, [2] = x, [3] = y,
-			[4] = 0x00,
-	};
-	struct Ch9329Frame frame = {0};
-	ch9329_frame(&frame, CH9329_CMD_SEND_MS_REL_DATA, &data, 5);
-	return ch9329_request(ch9329, &frame);
+	return mouse_rel(ch9329, x, y, 0);
 }
 
 int
 ch9329_mouse_wheel(struct Ch9329 *ch9329, int8_t wheel) {
-	const uint8_t data[5] = {
-			[0] = 0x01,  [1] = ch9329->mouse_button_state, [2] = 0, [3] = 0,
-			[4] = wheel,
-	};
-	struct Ch9329Frame frame = {0};
-	ch9329_frame(&frame, CH9329_CMD_SEND_MS_REL_DATA, &data, 5);
-	return ch9329_request(ch9329, &frame);
+	return mouse_rel(ch9329, 0, 0, wheel);
 }
 
 int
@@ -42,5 +41,5 @@ ch9329_mouse_button(struct Ch9329 *ch9329, uint8_t button, bool pressed) {
 	} else {
 		ch9329->mouse_button_state &= ~button;
 	}
-	return ch9329_mouse_rel(ch9329, 0, 0);
+	return mouse_rel(ch9329, 0, 0, 0);
 }

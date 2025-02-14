@@ -97,16 +97,22 @@ int
 ch9329_receive(struct Ch9329 *ch9329, struct Ch9329Frame *frame) {
 	int rv = 0;
 	uint8_t checksum = 0;
-
 	memset(frame, 0, sizeof(struct Ch9329Frame));
 
 	// header
+	if (ch9329->timeout > 0) {
+		rv = serial_wait(ch9329, ch9329->timeout);
+		if (rv < 0) {
+			goto out;
+		}
+	}
 	rv = serial_read(ch9329->fd, frame->header, sizeof(frame->header));
 	if (rv < (int)sizeof(frame->header)) {
 		rv = -1;
 		goto out;
 	}
 
+	// data
 	uint8_t len = ch9329_frame_len(frame);
 	if (len > 0) {
 		if (ch9329->timeout > 0) {
@@ -115,8 +121,6 @@ ch9329_receive(struct Ch9329 *ch9329, struct Ch9329Frame *frame) {
 				goto out;
 			}
 		}
-
-		// data
 		rv = serial_read(ch9329->fd, frame->data, len);
 		if (rv < len) {
 			rv = -1;
@@ -124,14 +128,13 @@ ch9329_receive(struct Ch9329 *ch9329, struct Ch9329Frame *frame) {
 		}
 	}
 
+	// checksum
 	if (ch9329->timeout > 0) {
 		rv = serial_wait(ch9329, ch9329->timeout);
 		if (rv < 0) {
 			goto out;
 		}
 	}
-
-	// checksum
 	rv = serial_read(ch9329->fd, &checksum, 1);
 	if (rv < 1) {
 		rv = -1;
